@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tutor de Programación Básica con IA</title>
+  <style>
+    :root { --azul:#2457c5; --fondo:#f4f6fb; --texto:#1c2330; --borde:#d9deea; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--fondo); color:var(--texto); }
+    .contenedor { max-width: 820px; margin: 0 auto; height: 100vh; display:flex; flex-direction:column; padding: 16px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+    h1 { font-size: 1.25rem; margin:0; }
+    .controles { display:flex; gap:8px; align-items:center; }
+    select, button, input { font: inherit; }
+    select { padding:6px 8px; border:1px solid var(--borde); border-radius:8px; background:#fff; }
+    #chat { flex:1; overflow-y:auto; background:#fff; border:1px solid var(--borde); border-radius:12px; padding:16px; display:flex; flex-direction:column; gap:12px; }
+    .msg { max-width: 85%; padding:10px 14px; border-radius:14px; line-height:1.5; white-space:pre-wrap; word-wrap:break-word; }
+    .usuario { align-self:flex-end; background:var(--azul); color:#fff; border-bottom-right-radius:4px; }
+    .tutor { align-self:flex-start; background:#eef1f8; border-bottom-left-radius:4px; }
+    .etiquetas { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+    .etiqueta { font-size:.75rem; padding:2px 8px; border-radius:999px; background:#fff; border:1px solid var(--borde); color:#44506a; }
+    .etiqueta.apuntes { background:#e6f6ec; border-color:#a8dcb9; color:#1f6b3b; }
+    pre { background:#1c2330; color:#f1f5ff; padding:10px 12px; border-radius:8px; overflow-x:auto; margin:8px 0 0; }
+    code { font-family: ui-monospace, Consolas, monospace; font-size:.9rem; }
+    form { display:flex; gap:8px; margin-top:12px; }
+    #mensaje { flex:1; padding:12px; border:1px solid var(--borde); border-radius:10px; }
+    #enviar { padding:0 20px; border:0; border-radius:10px; background:var(--azul); color:#fff; cursor:pointer; }
+    #enviar:disabled { opacity:.6; cursor:wait; }
+    #reiniciar { padding:6px 12px; border:1px solid var(--borde); background:#fff; border-radius:8px; cursor:pointer; }
+    .error { color:#b3261e; }
+  </style>
+</head>
+<body>
+  <div class="contenedor">
+    <header>
+      <h1>🐍 Tutor de Programación Básica</h1>
+      <div class="controles">
+        <label for="nivel">Nivel:</label>
+        <select id="nivel">
+          <option value="principiante">Principiante</option>
+          <option value="intermedio">Intermedio</option>
+        </select>
+        <button id="reiniciar" type="button">Nueva conversación</button>
+      </div>
+    </header>
+
+    <div id="chat" aria-live="polite"></div>
+
+    <form id="formulario">
+      <input id="mensaje" type="text" maxlength="1000" autocomplete="off"
+             placeholder="Escribe tu duda, por ejemplo: ¿qué es una variable?" required>
+      <button id="enviar" type="submit">Enviar</button>
+    </form>
+  </div>
+
+  <script>
+    const chat = document.getElementById("chat");
+    const formulario = document.getElementById("formulario");
+    const campo = document.getElementById("mensaje");
+    const boton = document.getElementById("enviar");
+    const nivel = document.getElementById("nivel");
+
+    // Convierte ```bloques``` en <pre><code> sin permitir HTML del modelo
+    function renderizar(texto) {
+      const cont = document.createDocumentFragment();
+      const partes = texto.split(/```(?:\w+)?\n?/);
+      partes.forEach((parte, i) => {
+        if (!parte) return;
+        if (i % 2 === 1) {
+          const pre = document.createElement("pre");
+          const code = document.createElement("code");
+          code.textContent = parte.replace(/\n$/, "");
+          pre.appendChild(code);
+          cont.appendChild(pre);
+        } else {
+          cont.appendChild(document.createTextNode(parte));
+        }
+      });
+      return cont;
+    }
+
+    function agregar(clase, texto, meta) {
+      const div = document.createElement("div");
+      div.className = "msg " + clase;
+      div.appendChild(renderizar(texto));
+      if (meta) {
+        const et = document.createElement("div");
+        et.className = "etiquetas";
+        [["Tema: " + meta.tema, ""], ["Dificultad: " + meta.dificultad, ""],
+         [meta.uso_apuntes ? "📚 Usó los apuntes" : "Sin apuntes", meta.uso_apuntes ? "apuntes" : ""]]
+          .forEach(([t, c]) => {
+            const s = document.createElement("span");
+            s.className = "etiqueta " + c;
+            s.textContent = t;
+            et.appendChild(s);
+          });
+        div.appendChild(et);
+      }
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    async function cargarHistorial() {
+      try {
+        const r = await fetch("/historial");
+        const datos = await r.json();
+        if (!datos.length) {
+          agregar("tutor", "¡Hola! Soy tu tutor de programación básica. Pregúntame sobre variables, condicionales, bucles o funciones.");
+          return;
+        }
+        datos.forEach(m => agregar(m.rol === "user" ? "usuario" : "tutor", m.contenido));
+      } catch (e) { /* sin historial */ }
+    }
+
+    formulario.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const texto = campo.value.trim();
+      if (!texto) return;
+      agregar("usuario", texto);
+      campo.value = "";
+      boton.disabled = true;
+      const espera = agregar("tutor", "Pensando…");
+      try {
+        const r = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mensaje: texto, nivel: nivel.value })
+        });
+        const datos = await r.json();
+        espera.remove();
+        if (!r.ok) { agregar("tutor error", datos.error || "Error inesperado."); }
+        else { agregar("tutor", datos.respuesta, datos); }
+      } catch (e) {
+        espera.remove();
+        agregar("tutor error", "No hay conexión con el servidor.");
+      } finally {
+        boton.disabled = false;
+        campo.focus();
+      }
+    });
+
+    document.getElementById("reiniciar").addEventListener("click", async () => {
+      await fetch("/reiniciar", { method: "POST" });
+      chat.innerHTML = "";
+      agregar("tutor", "Conversación reiniciada. ¿Qué quieres aprender?");
+    });
+
+    cargarHistorial();
+  </script>
+</body>
+</html>
